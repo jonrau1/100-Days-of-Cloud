@@ -585,16 +585,328 @@ default_sg_flayer()
 
 ### Day 5 LinkedIn Post
 
+[Post Link](https://www.linkedin.com/feed/update/urn:li:activity:6982403353934753792/)
+
+Day 5 of #100daysofcloud & #100daysofcybersecurity. No code today, Giants football is on and I got some #steakposting to get to later. Will back this up to GitHub tomorrow but there will not be any snippets, just theory today.
+
+Sticking with the #network #security concepts for the next few days on AWS, going to cover off some other tools. I get that identity is overwhelmingly the largest vector of initial access, but not every compromised identity is a true admin, I'm sure the adversaries would love that. That is why they laterally move. That is why cryptojacking is such a boring attack. That is why data exfiltration is simple for #ransomware gangs and #doublextortion is a thing.
+
+While paring down egress for Security Groups will be really hard to do for your edge, there are other tools you can add in for a hardened network edge. Firstly, for private security groups, write your SGs per layer of your app - be it Private Lambda, EC2s running a webapp, EKS Nodes, etc. You can reference the other SG you know incoming traffic will be instead of allowing an entire Subnet or VPC CIDR.
+
+Application Load Balancers have some built in security settings such as overriding WAF Fail Open in case WAF ever falls down, ALB will not allow the uninspected traffic through. That is a tradeoff of availability for confidentiality and I do not know anyone who does that. HTTP Desync Attack protection helps mitigate HTTP request smuggling, and you can also drop invalid HTTP headers. You should also turn on access logging, it is in a weird CEF-like format, but Athena has a way to parse it.
+
+Next up is AWS WAF. Web App Firewalls protect against web app attacks - if you do not know how to write the rules (AWS does make it easy) you can use the managed rule groups to counter known bad IPs, SQLI, XSS, CSRF, specific parts of the request, and more. While there are ways around some of the protections, like very large requests, with some of the more advanced features like CAPTCHA challenges and bot protection. The logs are easy to parse and can be moved with Firehose (and converted to Parquet) and you can even do some fun NSPM/ML work with it (that's for later). You can orchestrate across your Organization use FMS as well, even auto-attaching.
+
+Next is CloudFront. Not a security tool on its own but CDNs help absorb DDOS (along with Shield), great log source, but with Lambda@Edge you can intercept requests and do some really interesting things dropping suspect requests that look like XSS by enforcing to setting certain headers. We'll do a Day on this soon.
+
+Network Firewall is a stateful NGFW-ish tool, it's operates like a Gateway, and works a lot like Suricata IDS/IPS to. You can create fine-grained rules to inspect the request and drop traffic that doesn't match specific ports/protocols and IPs. You can write Suricata-type rules for deep inspection and it also supports FMS and AWS Managed Threat Lists. Great for ingress/egress centralization.
+
+Stay Dangerous
+
 ### Day 5 Code Snippet
+
+NO CODE SNIPPET
 
 ## Day 6
 
+![Day 6 Carbon](./pics/day6.png)
+
 ### Day 6 LinkedIn Post
 
+[Post Link](https://www.linkedin.com/feed/update/urn:li:share:6982693255305953283/)
+
+Day 6 of #100daysofcloud & #100daysofcybersecurity we're still on our network game. Meant to do this for Day 5, but regarding finding what resources use the Default SG can be done via #CSPM or #AWS Config - but let's do it the "hard way" - and it will prove a few points as well.
+
+Financial considerations in security typically isn't broached outside of complaints about (lack of) budgets. That's valid, but not here. Despite being a "vendor #CISO" I'm very build-first. Outside of architecture and engineering chops a team needs are financial considerations - how to forecast usage/consumption and how it looks scaled up 2/5/10/20X for example. This is pertinent when it comes to AWS (and other #CSP) services since being regional it means needing to pay for it per-Region.
+
+When it comes to a real cost-benefit analysis - is it worth to your team to run a $5/month bill up per every AWS Region when outside of your main region(s) it will just be an unnecessary discretionary cost. Why not whip up some scripts for #Detective Controls for things you want to find without needing to administer and pay for a multi-region deployment that has limited use.
+
+That is where today's script comes in. Sure, you can throw on AWS Config & AWS Security Hub and write an Insight in SecHub to find resources using the default SG - but it's more money and work to just turn the services on before you see value. If you already know what you want, run a script: this script looks just at EC2, RDS and ALBs using Default SGs.
+
+The second theme is around data consistency in your collection. Nearly every API has a different way it returns information, especially nested metadata. For security groups EC2 gives you a name, RDS has the ID and status, ALB just gives you IDs. You'll run into this a lot where every API you interface with needs its own parsing logic. You also need to ensure that you settle on what the data should look like - Pascal vs Camel Case, what you'll name the keys, if you maintain the API's naming or use your own, are you going to be further joining or enriching?
+
+This script has an opinion. Normalized schema and pascal case, but you'll need to make the determination on your own. Recap: it's almost always more efficient to script your own detection, always be cognizant of costs, and settling on things as minor as schema and SLAs around your data collection leads to future #SecDataOps excellence.
+
+Stay Dangerous
+
+#awssecurity #cloudsecurity #security #bigdata
+
 ### Day 6 Code Snippet
+
+#### Permissions
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "VisualEditor0",
+            "Effect": "Allow",
+            "Action": [
+                "elasticloadbalancing:DescribeLoadBalancers",
+                "ec2:DescribeInstances",
+                "ec2:DescribeRegions",
+                "rds:DescribeDBInstances",
+                "ec2:DescribeSecurityGroups"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+```
+
+#### Code Snippets
+
+```python
+import boto3
+import json
+
+sts = boto3.client('sts')
+AWS_ACCOUNT_ID = sts.get_caller_identity()['Account']
+del sts
+
+def get_aws_regions():
+    '''
+    Retrieves all opted-in AWS Regions for this Account
+    '''
+    ec2 = boto3.client('ec2')
+
+    awsRegions = []
+
+    try:
+        # Get all Regions we are opted in for
+        for r in ec2.describe_regions()['Regions']:
+            regionName = str(r['RegionName'])
+            optInStatus = str(r['OptInStatus'])
+            if optInStatus == 'not-opted-in':
+                continue
+            else:
+                awsRegions.append(regionName)
+    except Exception as e:
+        raise e
+        
+    print('Got all AWS Regions')
+
+    del ec2
+
+    return awsRegions
+
+def default_sg_sniffer():
+    '''
+    This function commands all other functions, finds and assembles a list of resources and
+    writes to a file using multiprocessing
+    '''
+
+    # TODO: Consider multiprocessing this bullshit?
+
+    print(f'Locating EC2 instances using the Default Security Group.')
+    ec2Instances = find_ec2_using_default()
+    print(f'Found {len(ec2Instances)} EC2 instance(s) using the Default Security Group.')
+
+    print(f'Locating RDS instances using the Default Security Group.')
+    rdsInstances = find_rds_using_default()
+    print(f'Found {len(rdsInstances)} RDS instance(s) using the Default Security Group.')
+
+    print(f'Locating ALB load balancers using the Default Security Group.')
+    albLbs = find_alb_using_default()
+    print(f'Found {len(albLbs)} ALB load balancer(s) using the Default Security Group.')
+
+    # Use extend() to combine the lists before writing to file - we will add them to the first list, "ec2Instances"
+    # only in the event that there are actually things to write
+    if (
+        len(ec2Instances) and 
+        len(rdsInstances) and 
+        len(albLbs) != 0
+    ):
+        ec2Instances.extend(rdsInstances)
+        ec2Instances.extend(albLbs)
+        
+        # Write the new chonky combined list to JSON for all your reporting-related terror to inflict upon the world
+        with open('./default_sg_resources.json', 'w') as jsonfile:
+            json.dump(
+                ec2Instances,
+                jsonfile,
+                indent=2,
+                default=str
+            )
+
+        print('Wrote all non-compliant resources to file.')
+    else:
+        print('There are not any non-compliant resources to write to a file.')
+
+def find_ec2_using_default():
+    '''
+    Searches all Regions for EC2 instances using the Default Security Group
+    '''
+    awsRegions = get_aws_regions()
+
+    # Empty list for instances
+    instances = []
+
+    for region in awsRegions:
+        # Create a new Session for the Region and pass it to an EC2 client
+        session = boto3.Session(region_name=region)
+        ec2 = session.client('ec2')
+        paginator = ec2.get_paginator('describe_instances')
+        # Paginate through EC2s
+        for page in paginator.paginate(
+            Filters=[
+                {
+                    'Name': 'instance-state-name',
+                    'Values': [
+                        'running',
+                        'stopped'
+                    ]
+                }
+            ]
+        ):
+            for r in page['Reservations']:
+                for i in r['Instances']:
+                    instanceId = i['InstanceId']
+                    # Loop SGs, there is typically only one, but this checks for more
+                    for sg in i['SecurityGroups']:
+                        # Continue looping, unless a "default" SG is found, then add instance to list & break
+                        if sg['GroupName'] == 'default':
+                            defaultEc2Dict = {
+                                'AccountId': AWS_ACCOUNT_ID,
+                                'AwsRegion': region,
+                                'ResourceId': instanceId,
+                                'ResourceType': 'EC2Instance'
+                            }
+                            # append to list
+                            instances.append(defaultEc2Dict)
+                            break
+                        else:
+                            continue
+
+    return instances
+
+def find_rds_using_default():
+    '''
+    Searches all Regions for RDS instances using the Default Security Group
+    '''
+    awsRegions = get_aws_regions()
+
+    # Empty list for instances
+    instances = []
+
+    for region in awsRegions:
+        # Create a new Session for the Region and pass it to an RDS client and an EC2 client
+        session = boto3.Session(region_name=region)
+        rds = session.client('rds')
+        # EC2 Client is needed to find the name associated to an SG by ID
+        ec2 = session.client('ec2')
+        paginator = rds.get_paginator('describe_db_instances')
+        for page in paginator.paginate():
+            for r in page['DBInstances']:
+                instanceId = r['DBInstanceIdentifier']
+                # Loop SGs, there is typically only one, but this checks for more
+                for sg in r['VpcSecurityGroups']:
+                    sgId = sg['VpcSecurityGroupId']
+                    # Pass the SG ID to the DescribeSecurityGroups API to parse the name. If the name is default add
+                    # the DB information to the list and break the loop
+                    if ec2.describe_security_groups(GroupIds=[sgId])['SecurityGroups'][0]['GroupName'] == 'default':
+                        defaultRdsDict = {
+                            'AccountId': AWS_ACCOUNT_ID,
+                            'AwsRegion': region,
+                            'ResourceId': instanceId,
+                            'ResourceType': 'RDSInstance'
+                        }
+                        # append to list
+                        instances.append(defaultRdsDict)
+                        break
+                    else:
+                        continue
+
+    return instances
+
+def find_alb_using_default():
+    '''
+    Searches all Regions for Application Load Balancers using the Default Security Group
+    '''
+    awsRegions = get_aws_regions()
+
+    # Empty list for lbs
+    lbalancers = []
+
+    for region in awsRegions:
+        # Create a new Session for the Region and pass it to an ELBv2 client and en EC2 client
+        session = boto3.Session(region_name=region)
+        elbv2 = session.client('elbv2')
+        # EC2 Client is needed to find the name associated to an SG by ID
+        ec2 = session.client('ec2')
+        paginator = elbv2.get_paginator('describe_load_balancers')
+        # Paginate through ALBs
+        for page in paginator.paginate():
+            for l in page['LoadBalancers']:
+                lbName = l['LoadBalancerName']
+                # Similar to RDS & EC2, ALBs can have multiple load balancers, but like RDS only the ID is returned
+                for sg in l['SecurityGroups']:
+                    # Pass the SG ID to the DescribeSecurityGroups API to parse the name. If the name is default add
+                    # the DB information to the list and break the loop
+                    # The list of "SecurityGroups" only returns the IDs as is, no need for additional parsing...
+                    if ec2.describe_security_groups(GroupIds=[sg])['SecurityGroups'][0]['GroupName'] == 'default':
+                        defaultAlbDict = {
+                            'AccountId': AWS_ACCOUNT_ID,
+                            'AwsRegion': region,
+                            'ResourceId': lbName,
+                            'ResourceType': 'ALBLoadBalancer'
+                        }
+                        # append to list
+                        lbalancers.append(defaultAlbDict)
+                        break
+                    else:
+                        continue
+
+    return lbalancers
+
+default_sg_sniffer()
+```
 
 ## Day 7
 
 ### Day 7 LinkedIn Post
 
 ### Day 7 Code Snippet
+
+## Day 8
+
+### Day 8 LinkedIn Post
+
+### Day 8 Code Snippet
+
+## Day 9
+
+### Day 9 LinkedIn Post
+
+### Day 9 Code Snippet
+
+## Day 10
+
+### Day 10 LinkedIn Post
+
+### Day 10 Code Snippet
+
+## Day 11
+
+### Day 11 LinkedIn Post
+
+### Day 11 Code Snippet
+
+## Day 12
+
+### Day 12 LinkedIn Post
+
+### Day 12 Code Snippet
+
+## Day 13
+
+### Day 13 LinkedIn Post
+
+### Day 13 Code Snippet
+
+## Day 14
+
+### Day 14 LinkedIn Post
+
+### Day 14 Code Snippet
