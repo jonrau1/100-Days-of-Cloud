@@ -1274,9 +1274,159 @@ create_dnsfw_for_vpc()
 
 ## Day 9
 
+![Day 9 Carbon](./pics/day9.png)
+
 ### Day 9 LinkedIn Post
 
+[Post Link](https://www.linkedin.com/feed/update/urn:li:share:6983876031027798016/)
+
+Day 9 of #100daysofcloud & #100daysofcybersecurity with a continuation of AWS DNS Firewall, this time focused on logging considerations and setup. As usual, #github link with permissions and the #python code in the comments.
+
+DNSFW logging is a bit unique in how it is setup, as mentioned yesterday, DNSFW is part of the Route 53 Resolver ecosystem which means it is directly dependent on it not just for performing the DNS protection it also needs it for logging. That is to say there is not a dedicated logging source *strictly* for DNSFW - it is shared with the regular Query Logging.
+
+Sources like VPC Flow Logs has its own logical construct, CloudFront can output to Kinesis Streams, WAF has a dedicated Kinesis Firehose output, but you'll need to conduct custom parsing to get any DNSFW related activities if that is all you care about. That also means your logs will be naturally chattier as EVERY DNS query is being captured, not just what specific logs you want for the Firewall itself.
+
+Logging logic is stored within a Route 53 Resolver Query Logging Configuration. It is simply a store of a destination (S3, CloudWatch Logs or Kinesis Firehose) and associates VPCs. For collating across many Regions/Accounts S3 would be the logical choice, or using Firehose in between along with a Transformation to buffer the logs into Parquet for cheaper storage and easier querying.
+
+
+For the Firewall-specific logs, there will be extra keys added into the JSON logging payload, notably "firewall_rule_action", using that as a filter/query basis will grab matching logs only. Most of your logs will be from updates, EDR callbacks, and the SSM Agent and normal queries for your application. Still a good idea to get basic stats on that, most people don't know their DNS traffic anyway.
+
+Anyway, today's script will setup a very basic Query Logging Config, send logs to CloudWatch, and attach to all VPCs in your Region. Tomorrow we'll mess with some basic querying in Lambda and I'll give you an efficient way to unfold and query CloudWatch Logs streamed to Lambda.
+
+Stay Dangerous
+
+#awssecurity #dnssecurity #dns #bigdata #logging #siem #query #cloudsecurity #aws #awslogs #json #parquet
+
 ### Day 9 Code Snippet
+
+#### Permissions
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "VisualEditor0",
+            "Effect": "Allow",
+            "Action": [
+                "route53resolver:AssociateResolverQueryLogConfig",
+                "ec2:DescribeVpcs",
+                "logs:CreateLogGroup",
+                "route53resolver:CreateResolverQueryLogConfig"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+```
+
+#### Code Snippet
+
+```python
+import boto3
+import uuid
+
+rt53r = boto3.client('route53resolver')
+
+def create_query_logging_for_vpc():
+    '''
+    This function creates and attaches a DNS Query Logging Config to all VPCs in your current Region and sends logs to CloudWatch
+    '''
+    # Create request id
+    creatorRequestId = str(uuid.uuid4())
+    # Call helper functions
+    vpcs = find_vpcs()
+    logGroupArn = create_log_group()
+    # Create Log Config
+    queryLogId = create_query_logging_config(logGroupArn)
+
+    # Attach log config
+    for vpc in vpcs:
+        try:
+            rt53r.associate_resolver_query_log_config(
+                ResolverQueryLogConfigId=queryLogId,
+                ResourceId=vpc
+            )
+            print(f'Attached Query Logging Config {queryLogId} to VPC {vpc}.')
+        except Exception as e:
+            raise e
+
+def find_vpcs():
+    '''
+    Loops VPCs in your current region and returns a list of them
+    '''
+    ec2 = boto3.client('ec2')
+
+    vpcs = []
+    try:
+        for vpc in ec2.describe_vpcs()['Vpcs']:
+            vpcId = vpc['VpcId']
+            if vpc['State'] != 'available':
+                continue
+            else:
+                if vpcId not in vpcs:
+                    vpcs.append(vpcId)
+    except Exception as e:
+        raise e
+
+    print('Gathered all VPCs in Region.')
+
+    return vpcs
+
+def create_log_group():
+    '''
+    Creates a CloudWatch Log Group...that's it
+    '''
+    # Get AWS Account & Region info to generate ARN
+    awsRegion = boto3.Session().region_name
+    sts = boto3.client('sts')
+    awsAccountId = sts.get_caller_identity()['Account']
+    del sts
+
+    # Create the Log Group & assemble the ARN
+    cwl = boto3.client('logs')
+    try:
+        cwl.create_log_group(
+            logGroupName='/aws/route53/100DaysOfCloudDNSQueryLogs',
+            tags={'Name': '100DaysOfCloudDNSQueryLogs'}
+        )
+    except Exception as e:
+        raise e
+
+    logGroupArn = f'arn:aws:logs:{awsRegion}:{awsAccountId}:log-group:/aws/route53/100DaysOfCloudDNSQueryLogs:*'
+
+    print(f'Created CloudWatch Log Group: {logGroupArn}.')
+    
+    return logGroupArn
+
+def create_query_logging_config(log_group_arn):
+    '''
+    Creates a Route 53 Resolver Query Logging Configuration setting
+    '''
+    # Create request id
+    creatorRequestId = str(uuid.uuid4())
+    
+    try:
+        queryLogId = rt53r.create_resolver_query_log_config(
+            Name='100DaysOfCloudQueryLogging',
+            DestinationArn=log_group_arn,
+            CreatorRequestId=creatorRequestId,
+            Tags=[
+                {
+                    'Key': 'Name',
+                    'Value': '100DaysOfCloudQueryLogging'
+                }
+            ]
+        )['ResolverQueryLogConfig']['Id']
+    except Exception as e:
+        raise e
+
+    print(f'Created Route 53 Resolver Query Logging Configuration: {queryLogId}.')
+
+    return queryLogId
+
+create_query_logging_for_vpc()
+```
 
 ## Day 10
 
