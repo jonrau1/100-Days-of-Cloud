@@ -1430,9 +1430,89 @@ create_query_logging_for_vpc()
 
 ## Day 10
 
+![Day 10 Carbon](./pics/day10.png)
+
 ### Day 10 LinkedIn Post
 
+[Post Link](https://www.linkedin.com/feed/update/urn:li:share:6984155402036727809/)
+
+Day 10 of #100daysofcloud & #100daysofcybersecurity delving more into our #NetSec topic around #AWS #DNS #Firewall and logging activity from it. As usual, GitHub with the permissions and code snippets as needed will be within.
+
+Today you'll need to put a bit of sweat equity in, you don't learn anything being told all of the answers, that's a theme I'll try to go for - plus these small bite-sized posts are defeated if every single one needed exhaustive setup. So hopefully you're comfortable with creating CloudWatch Logs Subscription Filters to Lambda & setting up permissions as needed.
+
+DNS Query Logging in AWS will only add in DNS Firewall information when a match against a Rule is determined. This makes parsing a bit annoying as the logic will be centered on handling exceptions from the fact a piece of the log is missing. Outside of that - working with CloudWatch Logs streamed to Lambda is annoying. You get base64 encoded/zipped/stringified data in that needs to be decoded, decompressed and loaded into a useable format.
+
+Every log type via CloudWatch Logs has it's own nuances. For DNS Query Logging as you loop through the payload you need to access the logs within a "message" key which is another stringified JSON object. This Lambda function handles all of this logic for you and can expanded for use with other CWL sources such as API Gateway and VPC Flow Logs. The function is also written properly, with business logic outside the handler, globals outside of the functions, and limited crap loaded into memory.
+
+The Query Logs are a decently rich data source - provided basic orienteering intel, the action and domain list/rule group that DNSFW matched, and the source and query destination with some other DNS-related info. The logic here is very basic and just prints out what happened when a rule is matched. I put some minimal code to send the message to SNS if you wanted to do that.
+
+This brings up Security #ChatOps - for DNS based threats - especially if they're from known or suspected C2 nodes/malware domains/mining pools you'd want to be alerted immediately especially for COUNT actions so you can deploy countermeasures. The more services chained together the more latency you pick up. You also want to ensure you do not pummel your IR Analysts with a ton of noise and that an ALERT is treated as such - don't just throw it into a SIEM and hope someone triages correctly.
+
+As either a SOC Manager or a security leader in general you'll need to understand this prioritization & psychological impact it'll have. Push-based/pager style alert should really be reserved for something (potentially) terrible and not routine signaling.
+
+Tomorrow we'll do a bit of enrichment, IOC garbage on Day 12, and continue through the #NetSec stuff until we're all exhausted.
+
+Stay Dangerous
+
+#cloudsecurity #awssecurity #infosec
+
 ### Day 10 Code Snippet
+
+```python
+import os
+import boto3
+import json
+import base64
+import zlib
+
+#SNS_TOPIC_ARN = os.environ['SNS_TOPIC_ARN']
+#sns = boto3.client('sns')
+
+def lambda_handler(event, context):
+    # parse CWL event
+    data = event.get('awslogs', {}).get('data')
+    log_parser(data)
+
+def log_parser(data):
+    # Base64 Decode, decompress with ZLIB, load into a dict with json.loads
+    records = json.loads(zlib.decompress(base64.b64decode(data), 16 + zlib.MAX_WBITS))
+    # Loop through the query log message
+    for ql in records['logEvents']:
+        # parse the nested "message" object and load this into JSON as well
+        msg = json.loads(ql['message'])
+        try:
+            # If a log is not flagged by a firewall, it will not have the associated keys, any KeyError can be ignored
+            fwRuleAction = msg['firewall_rule_action']
+            fwDomainListId = msg['firewall_domain_list_id']
+            # Parse regular logs
+            acctId = msg['account_id']
+            awsRegion = msg['region']
+            vpcId = msg['vpc_id']
+            queryTime = msg['query_timestamp']
+            queryDestination = msg['query_name']
+            sourceId = msg['srcids']['instance']
+            # Assemble the message
+            message = f'Query to {queryDestination} from {sourceId} within VPC {vpcId} in AWS Account {acctId} in {awsRegion} matched the DNS Firewall Domain List {fwDomainListId} with the {fwRuleAction} Action at {queryTime}.'
+            
+            print(message)
+            # TODO: Implement
+            #send_to_sns(message)
+        except KeyError:
+            continue
+
+def send_to_sns(message):
+    # TODO: Implement
+    payload = {'Message': message}
+    '''
+    try:
+        sns.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Message=payload
+        )
+    except Exception as e:
+        print(e)
+    '''
+```
 
 ## Day 11
 
