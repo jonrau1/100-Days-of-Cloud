@@ -10,7 +10,17 @@ When you create something like this, it demonstrates you can stick with somethin
 
 ## Table of Contents
 
-> - [Day 1](./day-1) AWS environment variables Bash script for Account ID, Account Name, Region & Organizations Principal ID
+> - [Day 1](#day-1) AWS environment variables Bash script for Account ID, Account Name, Region & Organizations Principal ID
+> - [Day 2](#day-2) Python script to find all Default VPCs in every Region in current Account
+> - [Day 3](#day-3) Python script to find and delete all ***unused*** Default VPC and their dependencies in every Region in the current Account
+> - [Day 4](#day-4) Python script to find all Default Security Groups for every VPC in every Region in the current Account
+> - [Day 5](#day-5) No code, overview of AWS Network Security solutions
+> - [Day 6](#day-6) Python script to find certain resources (EC2, RDS, ALB) using the Default SG in every Region in the current Account and deletes the default rules
+> - [Day 7](#day-7) Python script to automated NMAP TCP scans against public-facing EC2 instances in all Regions in the current Account
+> - [Day 8](#day-8) Python script to create and attach a basic DNS Firewall with the AWS-managed malware Domain List to all VPCs in your current Region
+> - [Day 9](#day-9) Python script to create a basic Route 53 Resolver DNS Query Logging Configuration for all VPCs in your current Region and send the logs to CloudWatch
+> - [Day 10](#day-10) Python AWS Lambda script to parse CloudWatch Logs and print basic information on DNS Firewall events within them. Optional code to send messages to SNS
+> - [Day 11](#day-11) Python AWS Lambda script (modified Day 10) that enriches DNS Firewall findings with additional information. Optional code sends full parsing information to SQS
 
 ## Day 1
 
@@ -1520,9 +1530,115 @@ def send_to_sns(message):
 
 ## Day 11
 
+[Day 11 Carbon](./pics/day11.png)
+
 ### Day 11 LinkedIn Post
 
+[Post Link](https://www.linkedin.com/feed/update/urn:li:share:6984565708814745600/)
+
+Happy Saturday, Day 11 of #100daysofcloud & #100daysofcybersecurity brings us more parsing goodness with some VERY BASIC enrichment of our DNSFW Query Logs. GitHub in the comments, added a table of contents to it for you.
+
+Today's Lambda function code is a modification of Day 10 that adds even more simplification to the function and introduces a new helper function to conduct enrichment. The topic of enrichment like anything is security is subjective, and before you (as a #SecDataOps or #Detection Engineer) decide to throw a ton of extra work - you must ask yourself "What" and "So What".
+
+Having things like geolocation data, hostnames/IPs/domains, WHOIS, Shodan/Censys/Graylog, and other sort of information may not be pertinent to you. There is *always* a cost to enrichment - even if you are as optimized as possible - there's extra compute overhead, extra time (which may lead to an SLA breach), and more things that can break in your pipeline.
+
+You shake these things out by figuring out downstream use cases, if you can afford to do w/o that data, can you afford to lose ALL data because you're missing the enrichment, and does anyone really care for it?
+
+Another important data tenant is governance - it's too large to get into here but decided on schema ahead of time for things as predictable as cloud API results and log formats will save you a lot of effort. Do you want to stick with default fields or change to Pascal Case? Do you want nested objects or make them strings? Should you rename a field from source? Do you need all fields?
+
+This script takes an opinion here on all of the above: adding extra field, using PascalCase, stringifying lists, and renaming some fields. See if you can find it all. The function doesn't send the data anymore - you can figure that out yourself. Today we use the `Socket` module to determine the IP from the queried domain. While your DNSFW may BLOCK/COUNT it what about your other firewalls (WAFs, NGFWs), EDR tools or AWS GuardDuty? Maybe having an IP is useful especially when hackers bamboozle you with a new DGA.
+
+Tomorrow we will add A LOT more enrichment just to show you. Fun fact, this function is more efficient than yesterday's. Average memory used is 39MB versus 55MB and average time is about the same 10-65MS depending how many logs you get at once.
+
+Stay Dangerous
+
+#cloudsecurity #awssecurity #aws #cloud 
+
 ### Day 11 Code Snippet
+
+#### Code Snippet
+
+```python
+import json
+import base64
+import zlib
+import socket
+
+def lambda_handler(event, context):
+    # parse CWL event
+    log_parser(event.get('awslogs', {}).get('data'))
+
+def log_parser(data):
+    # Empty list to contain finished payloads
+    payloads = []
+    # Base64 Decode, decompress with ZLIB, load into a dict with json.loads
+    records = json.loads(zlib.decompress(base64.b64decode(data), 16 + zlib.MAX_WBITS))
+    # Loop through the query log message
+    for ql in records['logEvents']:
+        # parse the nested "message" object and load this into JSON as well
+        message = json.loads(ql['message'])
+        try:
+            # If a log is not flagged by a firewall, it will not have the associated keys, any KeyError can be ignored
+            message['firewall_rule_action']
+            # Send the pertinent messages to be enriched & write final result to list
+            payloads.append(
+                log_enrichment_and_normalization(
+                    message
+                )
+            )
+        except KeyError:
+            continue
+
+    payload_processor(payloads)
+
+def log_enrichment_and_normalization(message):
+    # Parse out the query name
+    queryName = message['query_name']
+    # Try to find out the IP Address...
+    try:
+        ip = socket.gethostbyname(queryName)
+    except Exception as e:
+        print(e)
+        ip = None
+    # Source ID may not be an instance in the future...
+    try:
+        srcId = message['srcids']['instance']
+    except KeyError:
+        srcId = None
+
+    payload = {
+        'AccountId': message['account_id'],
+        'Region': message['region'],
+        'VpcId': message['vpc_id'],
+        'QueryTimestamp': message['query_timestamp'],
+        'QueryName': queryName,
+        'QueryIpAddress': ip,
+        'QueryType': message['query_type'],
+        'QueryClass': message['query_class'],
+        'Rcode': message['rcode'],
+        'Answers': str(message['answers']),
+        'SrcAddr': message['srcaddr'],
+        'SrcPort': message['srcport'],
+        'Transport': message['transport'],
+        'SrcId': srcId,
+        'FirewallRuleAction': message['firewall_rule_action'],
+        'FirewallRuleGroupId': message['firewall_rule_group_id'],
+        'FirewallDomainListId': message['firewall_domain_list_id']
+    }
+
+    return payload
+
+def payload_processor(payloads):
+    # Receive and send chunks of payloads to SQS
+    for payload in payloads:
+        print(
+            json.dumps(
+                payload,
+                indent=2,
+                default=str
+            )
+        )
+```
 
 ## Day 12
 
