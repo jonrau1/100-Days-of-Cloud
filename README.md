@@ -8,6 +8,10 @@ In all seriousness, certs and degrees are fine but not everyone has the economic
 
 When you create something like this, it demonstrates you can stick with something (100 days is a lot!), and how you document it and execute tells me far more about your aptitude and attitude than a cert or degree. By all means, don't feel bad for getting them, but for those looking to pivot or to highlight themselves: do this.
 
+## Table of Contents
+
+> - [Day 1](./day-1) AWS environment variables Bash script for Account ID, Account Name, Region & Organizations Principal ID
+
 ## Day 1
 
 ![Day 1 Carbon](./pics/day1.png)
