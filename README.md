@@ -11,16 +11,28 @@ When you create something like this, it demonstrates you can stick with somethin
 ## Table of Contents
 
 > - [Day 1](#day-1) AWS environment variables Bash script for Account ID, Account Name, Region & Organizations Principal ID
+
 > - [Day 2](#day-2) Python script to find all Default VPCs in every Region in current Account
+
 > - [Day 3](#day-3) Python script to find and delete all ***unused*** Default VPC and their dependencies in every Region in the current Account
+
 > - [Day 4](#day-4) Python script to find all Default Security Groups for every VPC in every Region in the current Account
+
 > - [Day 5](#day-5) No code, overview of AWS Network Security solutions
+
 > - [Day 6](#day-6) Python script to find certain resources (EC2, RDS, ALB) using the Default SG in every Region in the current Account and deletes the default rules
+
 > - [Day 7](#day-7) Python script to automated NMAP TCP scans against public-facing EC2 instances in all Regions in the current Account
+
 > - [Day 8](#day-8) Python script to create and attach a basic DNS Firewall with the AWS-managed malware Domain List to all VPCs in your current Region
+
 > - [Day 9](#day-9) Python script to create a basic Route 53 Resolver DNS Query Logging Configuration for all VPCs in your current Region and send the logs to CloudWatch
+
 > - [Day 10](#day-10) Python AWS Lambda script to parse CloudWatch Logs and print basic information on DNS Firewall events within them. Optional code to send messages to SNS
-> - [Day 11](#day-11) Python AWS Lambda script (modified Day 10) that enriches DNS Firewall findings with additional information. Optional code sends full parsing information to SQS
+
+> - [Day 11](#day-11) Python AWS Lambda script (modified Day 10) that enriches DNS Firewall findings with additional information.
+
+> - [Day 12](#day-12) Python AWS Lambda script (modified Day 10 & 11) that enriches DNS Firewall findings with IP resolution from `socket` as well as provide geo-intel data for the IPs via ip-api.com.
 
 ## Day 1
 
@@ -1642,9 +1654,199 @@ def payload_processor(payloads):
 
 ## Day 12
 
+[Day 12 Carbon](./pics/day12.png)
+
 ### Day 12 LinkedIn Post
 
+[Post Link]()
+
+Hello friends, hope everyone not working today is having a restful Sunday. It is Day 12 of #100daysofcloud & #100daysofcybersecurity continuing on the thread of possible real-time enrichment use cases on top of AWS DNSFW Query Logs.
+
+Starting on Day 10 you learned how to deploy and optimize a Lambda function to parse CloudWatch Logs and exit if a desired state or item was not found (to lower costs & concurrent invocations). Day 11 saw as utilizing the Python `socket` module for a very basic way of finding the IP under a domain, today we continue to expand the Lambda function with a new "geo-intelligence" function.
+
+Calling it that is insulting to real #GEOINT work that analysts do out there, but really its more akin to #OSINT, finding the geographical location corresponding to an IP address as well as the ASN, ORG and ISP. This information is mostly used to paint pretty map pictures for gimmicky websites and SOC/NOC dashboards but there can be some usage of it.
+
+ISP/ASN/ORG can tell you about the nature of the hosting - is it Amazon, CloudFlare, Censys, Alibaba, Sinnet, etc? These usually correspond to a Country. Maybe you have data embargo concerns that need to be enforced due to contractual or regulatory obligations. Maybe you don't do business in a specific country but someone INSIDE your network is communicating outbound - that may be an issue. Maybe you're tired of chasing IOCs by country and need justification to block an entire country on your WAF or CDN (that would be more for inbound, not outbound connections).
+
+Some data "tricks" exist within the code, namely planning for conditions when you don't get data back (an IP or the GEOINT). Always ensure your downstream datastore / BI tool can support a specific data type. DynamoDB doesn't like Floats but it's fine with Null/NONE. QuickSight can parse GEO data easy but OpenSearch/Elastic needs it in a specific format. ALWAYS FACTOR IN ALL DATA USE CASES!
+
+Again, keep in mind overhead compute, troubleshooting, and whether you NEED to collect this data. Another important consideration to take (thanks to Brian for jogging this) is the concept of write-through caching. While Lambda is superfast, it's inefficient to continually query out OSINT for a specific domain or IP. Instead, consider writing to a cache such as Redis, Memcached, or using DynamoDB & DAX. You will attempt to GET (read) and write if it does not exist. 
+
+Provided your Lambda is within a VPC and you have collocated caching infra (don't need to use managed services) or using PrivateLink it'll be a lot faster and lessen failure edge cases reading instead of continually querying a website.
+
+Shoutout to IP API for a free, well-documented API and easy-to-use throttling indicators. All for now...
+
+Stay Dangerous
+
 ### Day 12 Code Snippet
+
+#### Code Snippet
+
+```python
+import json
+import base64
+import zlib
+import socket
+import urllib3
+from time import sleep
+# Pool Manager for urllib3 to (re)use
+http = urllib3.PoolManager()
+
+def lambda_handler(event, context):
+    # parse CWL event
+    log_parser(event.get('awslogs', {}).get('data'))
+
+def log_parser(data):
+    # Empty list to contain finished payloads
+    payloads = []
+    # Base64 Decode, decompress with ZLIB, load into a dict with json.loads
+    records = json.loads(zlib.decompress(base64.b64decode(data), 16 + zlib.MAX_WBITS))
+    # Loop through the query log message
+    for ql in records['logEvents']:
+        # parse the nested "message" object and load this into JSON as well
+        message = json.loads(ql['message'])
+        try:
+            # If a log is not flagged by a firewall, it will not have the associated keys, any KeyError can be ignored
+            message['firewall_rule_action']
+            # Send the pertinent messages to be enriched & write final result to list
+            payloads.append(
+                log_enrichment_and_normalization(
+                    message
+                )
+            )
+        except KeyError:
+            continue
+
+    payload_processor(payloads)
+
+def log_enrichment_and_normalization(message):
+    # Parse out the query name
+    queryName = message['query_name']
+    # Try to find out the IP Address...
+    try:
+        ip = socket.gethostbyname(queryName)
+    except Exception as e:
+        print(e)
+        ip = None
+
+    if ip != None:
+        geoint = geo_intelligence(ip)
+        countryCode = geoint['CountryCode']
+        latitude = int(geoint['Latitude'])
+        longitude = int(geoint['Longitude'])
+        isp = geoint['Isp']
+        org = geoint['Org']
+        asn = geoint['Asn']
+        asnName = geoint['AsnName']
+    else:
+        countryCode = None
+        latitude = int(0)
+        longitude = int(0)
+        isp = None
+        org = None
+        asn = None
+        asnName = None
+    # Source ID may not be an instance in the future...
+    try:
+        srcId = message['srcids']['instance']
+    except KeyError:
+        srcId = None
+
+    payload = {
+        'AccountId': message['account_id'],
+        'Region': message['region'],
+        'VpcId': message['vpc_id'],
+        'QueryTimestamp': message['query_timestamp'],
+        'QueryName': queryName,
+        'QueryIpAddress': ip,
+        'QueryType': message['query_type'],
+        'QueryClass': message['query_class'],
+        'Rcode': message['rcode'],
+        'Answers': str(message['answers']),
+        'SrcAddr': message['srcaddr'],
+        'SrcPort': message['srcport'],
+        'Transport': message['transport'],
+        'SrcId': srcId,
+        'FirewallRuleAction': message['firewall_rule_action'],
+        'FirewallRuleGroupId': message['firewall_rule_group_id'],
+        'FirewallDomainListId': message['firewall_domain_list_id'],
+        'CountryCode': countryCode,
+        'Latitude': latitude,
+        'Longitude': longitude,
+        'Isp': isp,
+        'Org': org,
+        'Asn': asn,
+        'Latitude': latitude,
+        'AsnName': asnName
+    }
+
+    return payload
+
+def geo_intelligence(ip):
+    # Generate request url for use
+    url = f'http://ip-api.com/json/{ip}?fields=status,message,countryCode,lat,lon,isp,org,as,asname'
+    # GET request
+    r = http.request(
+        'GET',
+        url
+    )
+    ttlHeader = int(r.headers['X-Ttl'])
+    requestsLeftHeader = int(r.headers['X-Rl'])
+    # handle throttling
+    if requestsLeftHeader == 0:
+        ttlHeader = int(r.headers['X-Ttl'])
+        waitTime = ttlHeader + 1
+        sleep(waitTime)
+        print('Request limit breached - retrying')
+        del r
+        # new request
+        r = http.request(
+            'GET',
+            url
+        )
+        ipJson = json.loads(r.data.decode('utf-8'))
+        countryCode = str(ipJson['countryCode'])
+        latitude = float(ipJson['lat'])
+        longitude = float(ipJson['lon'])
+        isp = str(ipJson['isp'])
+        org = str(ipJson['org'])
+        asn = str(ipJson['as'])
+        asnName = str(ipJson['asname'])
+    # If not fail
+    else:
+        ipJson = json.loads(r.data.decode('utf-8'))
+        countryCode = str(ipJson['countryCode'])
+        latitude = float(ipJson['lat'])
+        longitude = float(ipJson['lon'])
+        isp = str(ipJson['isp'])
+        org = str(ipJson['org'])
+        asn = str(ipJson['as'])
+        asnName = str(ipJson['asname'])
+
+    geoint = {
+        'CountryCode': countryCode,
+        'Latitude': latitude,
+        'Longitude': longitude,
+        'Isp': isp,
+        'Org': org,
+        'Asn': asn,
+        'Latitude': latitude,
+        'AsnName': asnName
+    }
+
+    return geoint
+
+def payload_processor(payloads):
+    # Receive and send chunks of payloads to SQS
+    for payload in payloads:
+        print(
+            json.dumps(
+                payload,
+                indent=2,
+                default=str
+            )
+        )
+```
 
 ## Day 13
 
