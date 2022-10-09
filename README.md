@@ -1658,7 +1658,7 @@ def payload_processor(payloads):
 
 ### Day 12 LinkedIn Post
 
-[Post Link]()
+[Post Link](https://www.linkedin.com/feed/update/urn:li:share:6984932402322100224/)
 
 Hello friends, hope everyone not working today is having a restful Sunday. It is Day 12 of #100daysofcloud & #100daysofcybersecurity continuing on the thread of possible real-time enrichment use cases on top of AWS DNSFW Query Logs.
 
