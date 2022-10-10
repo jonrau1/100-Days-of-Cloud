@@ -34,6 +34,8 @@ When you create something like this, it demonstrates you can stick with somethin
 
 > - [Day 12](#day-12) Python AWS Lambda script (modified Day 10 & 11) that enriches DNS Firewall findings with IP resolution from `socket` as well as provide geo-intel data for the IPs via ip-api.com.
 
+> - [Day 13](#day-13) Python script that mirrors enrichment steps from Day 12 and demonstrates the usage of DynamoDB as a write-through cache for IP addresses and associated geolocation data. DynamoDB creation script included.
+
 ## Day 1
 
 ![Day 1 Carbon](./pics/day1.png)
@@ -1850,12 +1852,316 @@ def payload_processor(payloads):
 
 ## Day 13
 
+![Day 13 Carbon](./pics/day13.png)
+
 ### Day 13 LinkedIn Post
 
+[Post Link](https://www.linkedin.com/feed/update/urn:li:share:6985295125828485120/)
+
+Day 13 of #100daysofcloud & #100daysofcybersecurity taking a step back from the specifics of AWS #netsec tools and #logging to approach write-through caching.
+
+In Day 12 I mentioned using tech such as DynamoDB or Redis as a write-through cache. A cache is any datastore that temporarily holds data to be retrieved and used later. That's a vast oversimplification, but caching is important for any setting which you will be frequently accessing specific data from a datastore that wouldn't be able to otherwise handle the request rate.
+
+At least that's the "science" behind it, the "art" is balancing the scales of adding yet-another-technology to your stack and figuring out if you'll knockoff whatever is downstream if you keep querying it for whatever data it is.
+
+As a #SecDataOps engineer learning caching tech, implementation and the decision trees behind it is important. When it comes to just-in-time enrichment it makes a lot of sense to use a cache. Whether it's because you're enriched in real-time before you deliver the data or it's ad-hoc as part of an IR Playbook or a SIEM rule that ingests IOCs or other enrichment it's probably much better to pull it from a cache. That goes doubly for real-time processing where you may run into throttling from a 3rd party API due to a high event-per-second rate like you can get from security/network logs in even a small environment.
+
+I take the enrichment use cases from Days 11 and 12 and put it into a basic Python script and have an opinionated way of using a function to get if a value exists in DynamoDB. If it does not exist, you query IP API as usual and then write to DyanmoDB for subsequent calls. In my testing, if the values are cached, it saves you 5-10ms per item you query. That is with a Gateway Endpoint.
+
+There are some other goodies in their like converting Floats to Decimals, creating Time-to-live values, and such. I include a bash script to create the table to match the script. DynamoDB expert-level topics may be covered later, there is a ton of great stuff you can do with DynamoDB to tune access patterns, improve efficiency, stream data, and more. I love it and it's my go-to datastore along with S3 for 95% of things I do.
+
+Final note: Hostname/Domain -> IP isn't always 1:1. If a domain is a fronted by a CDN like Fastly, CloudFront or CloudFlare you'll have 10s if not 100s of possible IPs. So the table design only accounts for IPs not for their paired hostnames. Keys in DynamoDB enforce uniqueness and access. If I set a RANGE key of Hostname in addition to the HASH key of IP, you'd need to query and write with both. 
+
+No permissions are included, don't want to give all the answers, you won't learn anything.
+
+Stay Dangerous 
+
+#threatintelligence #bigdata #aws #cloudsecurity #awssecurity 
+
 ### Day 13 Code Snippet
+
+#### Shell Script
+
+```shell
+echo 'Enter a name for your table:'
+read tablename
+aws dynamodb create-table \
+    --table-name $tablename \
+    --attribute-definitions AttributeName=IpAddress,AttributeType=S \
+    --key-schema AttributeName=IpAddress,KeyType=HASH \
+    --billing-mode PAY_PER_REQUEST
+sleep 5
+aws dynamodb update-time-to-live \
+    --table-name $tablename \
+    --time-to-live-specification Enabled=true,AttributeName=Ttl
+```
+
+#### Python Script
+
+```python
+import os
+import socket
+import urllib3
+import json
+from decimal import Decimal
+from time import sleep
+import boto3
+import botocore.exceptions
+from datetime import datetime
+# Env vars
+IP_GEOINT_CACHE_TABLE_NAME = os.environ['IP_GEOINT_CACHE_TABLE_NAME'] # export IP_GEOINT_CACHE_TABLE_NAME='dyanmodb_table_here'
+EPOCH_DAY = 86400
+
+# Pool Manager for urllib3 to (re)use
+http = urllib3.PoolManager()
+
+# Scary people to find
+SOME_HACKERS_I_GUESS = [
+    'thehackernews.com',
+    'krebsonsecurity.com',
+    'csoonline.com',
+    'darkreading.com',
+    'threatpost.com',
+    'welivesecurity.com',
+    'www.infosecurity-magazine.com',
+    'www.bleepingcomputer.com'
+]
+
+# Boto3 Clients
+dynamodb = boto3.resource('dynamodb')
+table = dynamodb.Table(IP_GEOINT_CACHE_TABLE_NAME)
+
+def determine_ip_address(hostnames):
+    '''
+    Uses Socket to find the IP address for a given hostname
+    '''
+    enrichedHostnames = []
+    for hostname in hostnames:
+        try:
+            ip = socket.gethostbyname(hostname)
+        except Exception as e:
+            print(e)
+            ip = None
+
+        if ip != None:
+            # Get cached results
+            geoint = get_cached_geo_intelligence(ip)
+            # If there are not cached results, write fresh
+            if geoint == None:
+                print(f'No cached results found for {ip}!')
+                geoint = geo_intelligence(ip)
+            countryCode = geoint['CountryCode']
+            latitude = float(geoint['Latitude'])
+            longitude = float(geoint['Longitude'])
+            isp = geoint['Isp']
+            org = geoint['Org']
+            asn = geoint['Asn']
+            asnName = geoint['AsnName']
+        else:
+            countryCode = None
+            latitude = int(0)
+            longitude = int(0)
+            isp = None
+            org = None
+            asn = None
+            asnName = None
+
+        enrichedHostname = {
+            'Hostname': hostname,
+            'IpAddress': ip,
+            'CountryCode': countryCode,
+            'Latitude': latitude,
+            'Longitude': longitude,
+            'Isp': isp,
+            'Org': org,
+            'Asn': asn,
+            'AsnName': asnName
+        }
+        if enrichedHostname not in enrichedHostnames:
+            enrichedHostnames.append(enrichedHostname)
+
+    save_data_to_file(enrichedHostnames)
+
+def get_cached_geo_intelligence(ip):
+    '''
+    Attempts to find cached geoint results for a given hostname
+    '''
+    try:
+        r = table.get_item(
+            Key={
+                'IpAddress': ip
+            }
+        )
+        if 'Item' in r:
+            geoint = {
+                'CountryCode': r['Item']['CountryCode'],
+                'Latitude': float(r['Item']['Latitude']),
+                'Longitude': float(r['Item']['Longitude']),
+                'Isp': r['Item']['Isp'],
+                'Org': r['Item']['Org'],
+                'Asn': r['Item']['Asn'],
+                'AsnName': r['Item']['AsnName']
+            }
+        else:
+            geoint = None
+    except botocore.exceptions.ClientError as error:
+        raise error
+
+    return geoint
+
+def geo_intelligence(ip):
+    # Generate request url for use
+    url = f'http://ip-api.com/json/{ip}?fields=status,message,countryCode,lat,lon,isp,org,as,asname'
+    # GET request
+    r = http.request(
+        'GET',
+        url
+    )
+    ttlHeader = int(r.headers['X-Ttl'])
+    requestsLeftHeader = int(r.headers['X-Rl'])
+    # handle throttling
+    if requestsLeftHeader == 0:
+        ttlHeader = int(r.headers['X-Ttl'])
+        waitTime = ttlHeader + 1
+        sleep(waitTime)
+        print('Request limit breached - retrying')
+        del r
+        # new request
+        r = http.request(
+            'GET',
+            url
+        )
+        ipJson = json.loads(r.data.decode('utf-8'))
+        countryCode = str(ipJson['countryCode'])
+        latitude = float(ipJson['lat'])
+        longitude = float(ipJson['lon'])
+        isp = str(ipJson['isp'])
+        org = str(ipJson['org'])
+        asn = str(ipJson['as'])
+        asnName = str(ipJson['asname'])
+    # If not fail
+    else:
+        ipJson = json.loads(r.data.decode('utf-8'))
+        countryCode = str(ipJson['countryCode'])
+        latitude = float(ipJson['lat'])
+        longitude = float(ipJson['lon'])
+        isp = str(ipJson['isp'])
+        org = str(ipJson['org'])
+        asn = str(ipJson['as'])
+        asnName = str(ipJson['asname'])
+
+    # create ttl and insert into the Dict
+    tstamp = int(datetime.utcnow().timestamp())
+    oneWeek = 7 * EPOCH_DAY
+    ttl = tstamp + oneWeek
+
+    geoint = {
+        'IpAddress': ip,
+        'CountryCode': countryCode,
+        'Latitude': latitude,
+        'Longitude': longitude,
+        'Isp': isp,
+        'Org': org,
+        'Asn': asn,
+        'AsnName': asnName,
+        'Ttl': ttl
+    }
+    try:
+        # Write Floats as Decimals...
+        table.put_item(
+            Item=json.loads(
+                json.dumps(
+                    geoint
+                ), 
+                parse_float=Decimal
+            )
+        )
+    except botocore.exceptions.ClientError as error:
+        print(error)
+        print('Failed to write results to DynamoDB')
+
+    return geoint
+
+def save_data_to_file(enriched_hostnames):
+    '''
+    Writes enriched hostnames to JSON file
+    '''
+
+    with open('./enriched_hostnames_list.json', 'w') as jsonfile:
+        json.dump(
+            enriched_hostnames,
+            jsonfile,
+            default=str,
+            indent=2
+        )
+
+determine_ip_address(
+    hostnames=SOME_HACKERS_I_GUESS
+)
+```
 
 ## Day 14
 
 ### Day 14 LinkedIn Post
 
 ### Day 14 Code Snippet
+
+## Day 15
+
+### Day 15 Linked Post
+
+### Day 15 Code Snippet
+
+## Day 16
+
+### Day 16 Linked Post
+
+### Day 16 Code Snippet
+
+## Day 17
+
+### Day 17 Linked Post
+
+### Day 17 Code Snippet
+
+## Day 18
+
+### Day 18 Linked Post
+
+### Day 18 Code Snippet
+
+## Day 19
+
+### Day 19 Linked Post
+
+### Day 19 Code Snippet
+
+## Day 20
+
+### Day 20 Linked Post
+
+### Day 20 Code Snippet
+
+## Day 21
+
+### Day 21 Linked Post
+
+### Day 21 Code Snippet
+
+## Day 22
+
+### Day 22 Linked Post
+
+### Day 22 Code Snippet
+
+## Day 23
+
+### Day 23 Linked Post
+
+### Day 23 Code Snippet
+
+## Day 24
+
+### Day 24 Linked Post
+
+### Day 24 Code Snippet
