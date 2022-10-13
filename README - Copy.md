@@ -10,7 +10,7 @@ When you create something like this, it demonstrates you can stick with somethin
 
 ## Table of Contents
 
-> - [Day 1](./days/day1/) AWS environment variables Bash script for Account ID, Account Name, Region & Organizations Principal ID
+> - [Day 1](#day-1) AWS environment variables Bash script for Account ID, Account Name, Region & Organizations Principal ID
 
 > - [Day 2](#day-2) Python script to find all Default VPCs in every Region in current Account
 
@@ -39,6 +39,42 @@ When you create something like this, it demonstrates you can stick with somethin
 > - [Day 14](#day-14) Python script to create an AWS WAFv2 Web Access Control List (ACL) that contains an IP Set with the latest IOCs from the CINS Score feed.
 
 > - [Day 15](#day-15) Modified Day 14 Python script that introduces logic for creating multiple types of IP Sets, updating existing ones, and converting hostnames to domains and into IP addresses. Uses IOCs from CINS Score and Coinblocker feeds. THIS WILL TRIGGER GUARDUDTY ALERTS.
+
+## Day 1
+
+![Day 1 Carbon](./pics/day1.png)
+
+### Day 1 LinkedIn Post
+
+[Post Link](https://www.linkedin.com/feed/update/urn:li:activity:6980913548331786240/)
+
+Time to do something I never partook in: #100daysofcloud #100daysofcybersecurity. It kind of favors the micro-content and maybe you will learn a thing or two from your (allegedly) Favorite CISO.
+
+In AWS, you're going to run into times where you need to know your Account ID, Account Name, Organizations ID, or current Region. Maybe it's for uniqueness, maybe its to provide to another command, maybe it is to fill in an environment variable, or maybe to write an IAM policy condition, or just because you want to know. Don't get so caught up in justification.
+
+These are some of my favorite. Using Carbon to create these nifty terminal pictures too. I'll mostly focus on AWS with CLI & Python, may throw in some M365 E5 Security stuff in there too just to keep you on your toes. Feel free to make requests too and engage with me, or suffer the consequences of learning NOTHING HAHHAHAHAHA...okay, I'll stop.
+
+Anyway, code for you copy-paste people:
+
+```bash
+sudo apt install -y jq
+# Get your Account ID
+AWS_ACCOUNT_ID=$(aws sts get-caller-identity | jq '.Account' -r)
+echo $AWS_ACCOUNT_ID
+# Get your Region
+AWS_REGION=$(aws configure get region)
+echo $AWS_REGION
+# Get your Account name
+AWS_ACCOUNT_NAME=$(aws organizations describe-account --account-id $AWS_ACCOUNT_ID | jq '.Account.Name' -r)
+echo $AWS_ACCOUNT_NAME
+# Get your AWS Organizations ID
+AWS_ORGANIZATIONS_PRINCIPAL_ID=$(aws organizations describe-organization | jq '.Organization.Id' -r)
+echo $AWS_ORGANIZATIONS_PRINCIPAL_ID
+```
+
+Stay Dangerous
+
+#security #learning #python #cli #aws #cloudsecurity #bash
 
 ### Day 2 Code Snippet
 
