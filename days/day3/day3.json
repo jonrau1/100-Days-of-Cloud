@@ -1,0 +1,29 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "VpcYeeter",
+            "Effect": "Allow",
+            "Action": [
+                "ec2:DescribeInternetGateways",
+                "ec2:DescribeNetworkInterfaces",
+                "ec2:DeleteSubnet",
+                "ec2:DescribeVpcs",
+                "ec2:DescribeRegions",
+                "ec2:DeleteInternetGateway",
+                "ec2:DetachInternetGateway",
+                "ec2:DeleteVpc",
+                "ec2:DescribeSubnets"
+            ],
+            "Resource": "*",
+            "Condition": {
+                "ForAnyValue:StringEquals": {
+                    "aws:SourceVpce": "vpce-123123" # REPLACE THIS VALUE IF YOURE USING VPC ENDPOINTS
+                },
+                "IpAddress": {
+                    "aws:SourceIp": "192.168.1.1" # REPLACE THIS IF YOU WANT TO USE THE PRIVATE IP OF AN EIP/ENI!!!
+                }
+            }
+        }
+    ]
+}
