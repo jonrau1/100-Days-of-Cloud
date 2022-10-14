@@ -41,3 +41,5 @@ When you create something like this, it demonstrates you can stick with somethin
 > - [Day 15](./days/day15/) Modified Day 14 Python script that introduces logic for creating multiple types of IP Sets, updating existing ones, and converting hostnames to domains and into IP addresses. Uses IOCs from CINS Score and Coinblocker feeds. THIS WILL TRIGGER GUARDUDTY ALERTS.
 
 > - [Day 16](./days/day16/) Redid this repo...that's it. LinkedIn post about plans.
+
+> - [Day 17](./days/day17/) Updated Python script to dynamically create and/or update WAF Web ACLs. Includes sample AWS-managed Rule Groups within the Web ACL

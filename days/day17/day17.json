@@ -1,0 +1,21 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "VisualEditor0",
+            "Effect": "Allow",
+            "Action": [
+                "wafv2:ListRuleGroups",
+                "wafv2:ListWebACLs",
+                "wafv2:CreateRuleGroup",
+                "wafv2:UpdateWebACL",
+                "wafv2:UpdateRuleGroup",
+                "wafv2:CreateWebACL",
+                "wafv2:ListIPSets",
+                "wafv2:CreateIPSet",
+                "wafv2:UpdateIPSet"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
