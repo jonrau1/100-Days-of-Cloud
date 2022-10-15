@@ -1,0 +1,29 @@
+{
+    "Version":"2012-10-17",
+    "Statement":[
+        {
+            "Action":[
+                "wafv2:PutLoggingConfiguration",
+                "wafv2:DeleteLoggingConfiguration",
+                "wafv2:ListWebAcls"
+            ],
+            "Resource":[
+                "*"
+            ],
+            "Effect":"Allow",
+            "Sid":"LoggingConfigurationAPI"
+        },
+        {
+            "Sid":"WebACLLoggingS3",
+            "Action":[
+                "s3:PutBucketPolicy",
+                "s3:CreateBucket",
+                "s3:GetBucketPolicy"
+            ],
+            "Resource":[
+                "*"
+            ],
+            "Effect":"Allow"
+        }
+    ]
+}
