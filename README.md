@@ -14,7 +14,7 @@ When you create something like this, it demonstrates you can stick with somethin
 
 > - [Day 2](./days/day2/) Python script to find all Default VPCs in every Region in current Account
 
-> - [Day 3](./days/day3/)Python script to find and delete all ***unused*** Default VPC and their dependencies in every Region in the current Account
+> - [Day 3](./days/day3/) Python script to find and delete all ***unused*** Default VPC and their dependencies in every Region in the current Account
 
 > - [Day 4](./days/day4/) Python script to find all Default Security Groups for every VPC in every Region in the current Account
 
@@ -43,3 +43,5 @@ When you create something like this, it demonstrates you can stick with somethin
 > - [Day 16](./days/day16/) Redid this repo...that's it. LinkedIn post about plans.
 
 > - [Day 17](./days/day17/) Updated Python script to dynamically create and/or update WAF Web ACLs. Includes sample AWS-managed Rule Groups within the Web ACL
+
+> - [Day 18](./days/day18/) Python script to create an S3 Bucket for WAF Logging and setup logging. Small script included to generate WAF logs.
