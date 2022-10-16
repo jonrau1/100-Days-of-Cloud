@@ -45,3 +45,5 @@ When you create something like this, it demonstrates you can stick with somethin
 > - [Day 17](./days/day17/) Updated Python script to dynamically create and/or update WAF Web ACLs. Includes sample AWS-managed Rule Groups within the Web ACL
 
 > - [Day 18](./days/day18/) Python script to create an S3 Bucket for WAF Logging and setup logging. Small script included to generate WAF logs.
+
+> - [Day 19](./days/day19/) Python script to batch process and enrich AWS WAF logs that match any BLOCK actions
